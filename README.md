@@ -244,7 +244,7 @@ docker compose up -d
  - 트래픽이 몰릴 때 요청 제한 / 품절 / 큐 처리가 정상 동작하는가?
 3. 검증 절차
  (1) Smoke Test
-    - 목적 : API 흐름이 정상인지 확인한다
+    - 목적 : 앱이 가동되어있고, k6스크립트와 API 흐름이 정상인지 확인한다
     - 조건 : VU 1명 , 시간 10 ~ 30초
  (2) Normal Load Test
     - 목적 : 평상시 주문 트래픽에서는 안정적인지 확인
@@ -261,4 +261,38 @@ docker compose up -d
  (6)  Rate Limit Test
     - 목적 : 같은 사용자가 너무 많이 주문 요청하면 Redis rate limit이 막는지 확인
     - 조건 : userId 고정, VU 50명, 시간 20초
+4. 실제 검증 결과
+ (1) Smoke Test
+  █ TOTAL RESULTS
+
+    checks_total.......: 20      1.977038/s
+    checks_succeeded...: 100.00% 20 out of 20
+    checks_failed......: 0.00%   0 out of 20
+
+    ✓ status is 200                                                                                                                                                                                                                                                                                                 
+    ✓ success is true                                                                                                                                                                                                                                                                                               
+
+    HTTP
+    http_req_duration..............: avg=10.05ms min=8.6ms med=9.86ms max=14.12ms p(90)=10.51ms p(95)=12.31ms                                                                                                                                                                                                       
+      { expected_response:true }...: avg=10.05ms min=8.6ms med=9.86ms max=14.12ms p(90)=10.51ms p(95)=12.31ms                                                                                                                                                                                                       
+    http_req_failed................: 0.00%  0 out of 10
+    http_reqs......................: 10     0.988519/s
+
+    EXECUTION
+    iteration_duration.............: avg=1.01s   min=1s    med=1.01s  max=1.02s   p(90)=1.01s   p(95)=1.01s                                                                                                                                                                                                         
+    iterations.....................: 10     0.988519/s
+    vus............................: 1      min=1       max=1
+    vus_max........................: 1      min=1       max=1
+
+    NETWORK
+    data_received..................: 2.2 kB 220 B/s
+    data_sent......................: 840 B  83 B/s
+    
+    - checks_total : 총 10번의 요청을 했고 요청마다 2개의 검사를 통과했으므로 20개의 검사가 성공
+    - http_req_failed : HTTP 요청 10번중 실패 0번
+    - http_req_duration : 응답시간 평균 10.05ms, 가장 빠른 요청 8.65ms, 가장 느린 요청 14.12ms, 95% 요청은 12.31ms 안에 끝남
+    - http_reqs : 요청 수
+    - iterations : default function이 한 번 실행된 횟수다
+    - vu : 가상의 사용자 숫자 라는뜻
+ (2) Spike Test 
 ```
