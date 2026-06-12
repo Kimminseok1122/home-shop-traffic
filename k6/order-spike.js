@@ -1,231 +1,138 @@
 import http from 'k6/http';
-import { check, sleep } from 'k6';
-import { Counter } from 'k6/metrics';
+import {check, sleep} from 'k6';
+import {Counter} from 'k6/metrics';
 
-http.setResponseCallback(http.expectedStatuses(200, 202, 409, 429));
+// VU 0 -> 200 까지 상승시켰을때
+// 입장 API와 주문 API가 밀리진 않는지, 서버 500 에러가 없는지, 재고 소진 409가 섞이진 않는지 backpressure 429는 범위내로 나오는지 체크
+http.setResponseCallback(http.expectedStatuses(200, 202, 409));
 
 export const options = {
     scenarios: {
         spike: {
             executor: 'ramping-vus',
+            startVUs: 0,
             stages: [
-                { duration: '10s', target: 50 },
-                { duration: '10s', target: 100 },
-                { duration: '10s', target: 200 },
+                {duration: '5s', target: 50},
+                {duration: '5s', target: 200},
+                {duration: '20s', target: 200},
+                {duration: '10s', target: 0},
             ],
-        },
+            gracefulRampDown: '5s',
+            gracefulStop: '10s',
+            tags: {
+                test_type: 'order_spike'
+            }
+        }
     },
     thresholds: {
-        checks: ['rate==1.0'],
-
-        order_unexpected: ['count==0'],
-
-        order_400_unknown: ['count==0'],
-        order_409_unknown: ['count==0'],
-        order_429_unknown: ['count==0'],
-    },
-};
+        checks: ['rate>0.99'],
+        http_req_failed: ['rate<0.01'],
+        'http_req_duration{api:enter}': ['p(95)<500'],
+        'http_req_duration{api:order}': ['p(95)<1000'],
+        order_5xx: ['count==0'],
+        order_unexpected: ['count==0']
+    }
+}
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
-const BROADCAST_ID = Number(__ENV.BROADCAST_NUM || 1);
+const BROADCAST_ID = Number(__ENV.BROADCAST_ID || 1);
 const PRODUCT_ID = Number(__ENV.PRODUCT_ID || 1);
+const STOCK = Number(__ENV.STOCK || 1000000);
 const SLEEP_SECONDS = Number(__ENV.SLEEP_SECONDS || 1);
 
-const enterSuccess = new Counter('enter_success');
-const enterFailed = new Counter('enter_failed');
-const enterTokenMissing = new Counter('enter_token_missing');
+const enter_200 = new Counter('enter_200');
+const enter_failed = new Counter('enter_failed');
 
-const orderTotal = new Counter('order_total');
-const order202 = new Counter('order_202');
+const order_202 = new Counter('order_202');
+const enter_409 = new Counter('enter_409');
+const order_429 = new Counter('order_429');
+const order_5xx = new Counter('order_5xx');
+const order_unexpected = new Counter('order_unexpected');
 
-const order400QuantityError = new Counter('order_400_quantity_error');
-const order400RequiredError = new Counter('order_400_required_error');
-const order400Unknown = new Counter('order_400_unknown');
+export function setup() {
+    const resetRes = http.post(`${BASE_URL}/api/admin/products/${PRODUCT_ID}/stock?stock=${STOCK}`);
 
-const order409OutOfStock = new Counter('order_409_out_of_stock');
-const order409Duplicate = new Counter('order_409_duplicate');
-const order409Unknown = new Counter('order_409_unknown');
-
-const order429QueueFull = new Counter('order_429_queue_full');
-const order429RateLimit = new Counter('order_429_rate_limit');
-const order429Unknown = new Counter('order_429_unknown');
-
-const orderUnexpected = new Counter('order_unexpected');
-
-function safeJson(res, path) {
-    try {
-        return res.json(path);
-    } catch (e) {
-        return undefined;
-    }
-}
-
-function getErrorInfo(res) {
-    const error = safeJson(res, 'error');
-    const message = safeJson(res, 'message');
-
-    return {
-        error: error === undefined || error === null ? '' : String(error),
-        message: message === undefined || message === null ? '' : String(message),
-    };
-}
-
-function errorText(res) {
-    const info = getErrorInfo(res);
-    return `${info.error} ${info.message}`.toLowerCase();
-}
-
-function debugError(res) {
-    if (__ENV.DEBUG_ERRORS === 'true') {
-        console.log(`status=${res.status}, body=${res.body}`);
-    }
-}
-
-function countOrderResult(orderRes) {
-    orderTotal.add(1);
-
-    if (orderRes.status === 202) {
-        order202.add(1);
-        return;
-    }
-
-    const text = errorText(orderRes);
-
-    if (orderRes.status === 400) {
-        if (text.includes('quantity')) {
-            order400QuantityError.add(1);
-        } else if (
-            text.includes('broadcastid') ||
-            text.includes('broadcast') ||
-            text.includes('productid') ||
-            text.includes('product') ||
-            text.includes('userid') ||
-            text.includes('user id') ||
-            text.includes('required')
-        ) {
-            order400RequiredError.add(1);
-        } else {
-            order400Unknown.add(1);
-            debugError(orderRes);
-        }
-
-        return;
-    }
-
-    if (orderRes.status === 409) {
-        if (
-            text.includes('sold out') ||
-            text.includes('out of stock') ||
-            text.includes('out_of_stock') ||
-            text.includes('stock')
-        ) {
-            order409OutOfStock.add(1);
-        } else if (
-            text.includes('duplicate') ||
-            text.includes('duplicated') ||
-            text.includes('idempotency')
-        ) {
-            order409Duplicate.add(1);
-        } else {
-            order409Unknown.add(1);
-            debugError(orderRes);
-        }
-
-        return;
-    }
-
-    if (orderRes.status === 429) {
-        if (
-            text.includes('queue') ||
-            text.includes('queue is full')
-        ) {
-            order429QueueFull.add(1);
-        } else if (
-            text.includes('rate') ||
-            text.includes('limit') ||
-            text.includes('too many')
-        ) {
-            order429RateLimit.add(1);
-        } else {
-            order429Unknown.add(1);
-            debugError(orderRes);
-        }
-
-        return;
-    }
-
-    orderUnexpected.add(1);
-    debugError(orderRes);
+    check(resetRes, {
+        'stock reset success': (r) => r.status === 200
+    });
 }
 
 export default function () {
-    const userId = Math.floor(Math.random() * 1000000) + 1;
+
+    const userId = Math.floor(Math.random() * 1000000000) + 1;
 
     const enterRes = http.post(
         `${BASE_URL}/api/live/${BROADCAST_ID}/enter`,
-        JSON.stringify({ userId }),
+        JSON.stringify({
+            userId
+        }),
         {
             headers: {
-                'Content-Type': 'application/json',
+                'Content-Type': 'application/json'
             },
             tags: {
-                api: 'enter',
-            },
+                api: 'enter'
+            }
         }
     );
 
     const entered = check(enterRes, {
-        'enter waiting room success': (r) => r.status === 200,
-        'return success': (r) => safeJson(r, 'success') === true,
-        'waiting token is not empty': (r) => {
-            const token = safeJson(r, 'data.waitingToken');
+        'enter success 200': (r) => r.status === 200,
+        'enter json success ': (r) => r.json('success') === true,
+        'waiting token is existed': (r) => {
+            const token = r.json('data.waitingToken');
             return typeof token === 'string' && token.length > 0;
-        },
+        }
     });
 
-    if (!entered) {
-        enterFailed.add(1);
-
-        const token = safeJson(enterRes, 'data.waitingToken');
-        if (!token) {
-            enterTokenMissing.add(1);
-        }
-
-        debugError(enterRes);
+    if(!entered){
+        enter_failed.add(1);
         sleep(SLEEP_SECONDS);
         return;
     }
 
-    enterSuccess.add(1);
-
-    const token = enterRes.json('data.waitingToken');
+    enter_200.add(1);
 
     const orderRes = http.post(
         `${BASE_URL}/api/orders`,
-        JSON.stringify({
-            broadcastId: BROADCAST_ID,
-            productId: PRODUCT_ID,
-            userId,
-            quantity: 1,
-        }),
+        JSON.stringify(
+            {
+                broadcastId: BROADCAST_ID,
+                userId,
+                productId: PRODUCT_ID,
+                quantity: 1
+            }
+        ),
         {
-            headers: {
+            headers:{
                 'Content-Type': 'application/json',
-                'X-User-Id': String(userId),
-                'X-Waiting-Token': token,
-                'Idempotency-Key': `${userId}-${Date.now()}-${Math.random()}`,
+                'X-Waiting-Token': enterRes.json('data.waitingToken'),
+                'Idempotency-Key': `${userId}-${Date.now()}-${Math.random()}`
             },
-            tags: {
-                api: 'order',
-            },
+            tags:{
+                api: 'order'
+            }
         }
     );
 
-    countOrderResult(orderRes);
+    if(orderRes.status === 202){
+        order_202.add(1);
+    } else if(orderRes.status === 409){
+        enter_409.add(1);
+    } else if(orderRes.status === 429){
+        order_429.add(1);
+    } else if(orderRes.status >= 500){
+        order_5xx.add(1);
+    } else {
+        order_unexpected.add(1);
+    }
 
     check(orderRes, {
-        'order accepted or controlled': (r) => [202, 409, 429].includes(r.status),
+        'order accepted or rejected': (r) => [202, 409].includes(r.status),
     });
 
     sleep(SLEEP_SECONDS);
 }
+
+
+

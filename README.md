@@ -247,21 +247,23 @@ docker compose up -d
     - 목적 : 앱이 가동되어있고, k6스크립트와 API 흐름이 정상인지 확인한다
     - 조건 : VU 1명 , 시간 10 ~ 30초
  (2) Normal Load Test
-    - 목적 : 평상시 주문 트래픽에서는 안정적인지 확인
-    - 조건 : VU 10 ~ 30명 , 시간 : 1 ~ 2분 , 재고 10000개 (현재 worker의 처리량은 초당 26건정도이기 때문)
+    - 목적 : 평상시 주문 트래픽에서는 시스템의 반응이 어떤지를 확인한다
+    - 조건 : VU 0 ~ 200명 , 시간 : 1 ~ 2분 , 재고 10000개
  (3) Queue Capacity Test
     - 목적 : 주문 큐가 밀리는 상황을 의도적으로 만들고, Worker가 나중에 따라잡는지 확인
     - 조건 : VU 50명 , 시간 : 1분 , 재고 10000개
  (4) Spike Test
-    - 목적 : 홈쇼핑 방송처럼 순간적으로 어떻게 반응하는지 확인
-    - 조건 : 10초동안 VU가 50명까지 증가하고 20초동안 200명까지 증가 10초동안 0명으로 감소
+    - 목적 : 순간적으로 트래픽이 몰릴때 시스템이 어떻게 반응하는지 확인
+    - 조건 : 10초동안 VU가 50~200명까지 증가하고 20초동안 200명으로 유지한 후 10초동안 0명으로 감소
  (5) Sold-out Test
     - 목적 : 재고보다 많은 주문이 들어와도 재고가 음수가 안 되는지 확인
     - 조건 : VU 200명 , 시간 30초  , 재고 100개
  (6)  Rate Limit Test
     - 목적 : 같은 사용자가 너무 많이 주문 요청하면 Redis rate limit이 막는지 확인
     - 조건 : userId 고정, VU 50명, 시간 20초
-4. 실제 검증 결과
+4. 현재 서버의 처리스팩
+    - workers : 4개 workers의 delay는 150ms 4 x (1000ms/150ms) = 26orders/s 
+5. 실제 검증 결과
  (1) Smoke Test
   █ TOTAL RESULTS
 
@@ -295,4 +297,46 @@ docker compose up -d
     - iterations : default function이 한 번 실행된 횟수다
     - vu : 가상의 사용자 숫자 라는뜻
  (2) Spike Test 
+   █ TOTAL RESULTS
+
+    checks_total.......: 23177  566.400846/s
+    checks_succeeded...: 78.35% 18160 out of 23177
+    checks_failed......: 21.64% 5017 out of 23177
+
+    ✓ stock reset success                                                                                                                                                                                                                                                                                           
+    ✓ enter success 200                                                                                                                                                                                                                                                                                             
+    ✓ enter json success                                                                                                                                                                                                                                                                                            
+    ✓ waiting token is existed                                                                                                                                                                                                                                                                                      
+    ✗ order accepted or rejected                                                                                                                                                                                                                                                                                    
+      ↳  13% — ✓ 777 / ✗ 5017                                                                                                                                                                                                                                                                                       
+
+    CUSTOM
+    enter_200......................: 5794   141.594102/s
+    order_202......................: 777    18.98837/s
+    order_429......................: 5017   122.605732/s
+    order_5xx......................: 0      0/s
+    order_unexpected...............: 0      0/s
+
+    HTTP
+    http_req_duration..............: avg=4.67ms min=503.49µs med=3.68ms max=202.76ms p(90)=8.39ms  p(95)=15.01ms                                                                                                                                                                                                    
+      { api:enter }................: avg=5.09ms min=2.6ms    med=4.47ms max=52.74ms  p(90)=7.37ms  p(95)=9.02ms                                                                                                                                                                                                     
+      { api:order }................: avg=4.21ms min=503.49µs med=1.56ms max=202.76ms p(90)=14.81ms p(95)=17.89ms                                                                                                                                                                                                    
+      { expected_response:true }...: avg=7.11ms min=2.6ms    med=4.72ms max=202.76ms p(90)=14.28ms p(95)=17.41ms                                                                                                                                                                                                    
+    http_req_failed................: 43.29% 5017 out of 11589
+    http_reqs......................: 11589  283.212642/s
+
+    EXECUTION
+    iteration_duration.............: avg=1s     min=1s       med=1s     max=1.25s    p(90)=1.01s   p(95)=1.02s                                                                                                                                                                                                      
+    iterations.....................: 5794   141.594102/s
+    vus............................: 13     min=7             max=200
+    vus_max........................: 200    min=200           max=200
+
+    NETWORK
+    data_received..................: 3.0 MB 73 kB/s
+    data_sent......................: 2.7 MB 67 kB/s
+    
+    - 200 VU / sleep 1초 조건에서 평균 약 141 order/s 수준의 부하가 들어왔고 피크 구간에서는 약 200 order/s 근처까지 갔을 가능성이 높다
+    - 이때 서버는 5xx 반응 없이 살아남았지만 주문의 86.6%를 429에러로 튕겨내었다.
+    
+    
 ```
